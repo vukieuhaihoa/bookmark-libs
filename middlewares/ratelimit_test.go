@@ -1,0 +1,264 @@
+package middleware
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	mockRateLimit "github.com/vukieuhaihoa/bookmark-libs/ratelimit/mocks"
+)
+
+var userID = "de305d54-75b4-431b-adb2-eb6b9e546099"
+var jwtClaims = jwt.MapClaims{"sub": userID}
+
+func TestRateLimit_RateLimit_byIP(t *testing.T) {
+	t.Parallel()
+
+	// httptest.NewRequest sets RemoteAddr to "192.0.2.1:1234" by default,
+	// so Gin's ClientIP() always returns "192.0.2.1" in tests.
+	testKey := fmt.Sprintf(RateLimitKeyFormat, "192.0.2.1")
+
+	testCases := []struct {
+		name             string
+		setupRequest     func(ctx *gin.Context)
+		setupMockRepo    func(ctx context.Context) *mockRateLimit.Repository
+		expectedCode     int
+		expectedResponse string
+		expectedAborted  bool
+	}{
+		{
+			name: "first request - counter not exists (return 0)",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(0, nil)
+				repoMock.On("IncreaseRateLimit", ctx, testKey, IPRateLimitInterval).
+					Return(nil)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+		{
+			name: "under the limit - counter below max",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(IPRateLimitMaxCount-1, nil)
+				repoMock.On("IncreaseRateLimit", ctx, testKey, IPRateLimitInterval).
+					Return(nil)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+		{
+			name: "rate limit exceeded - counter at max",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(IPRateLimitMaxCount, nil)
+				// IncreaseRateLimit must NOT be called when rate limit is exceeded
+				return repoMock
+			},
+			expectedCode:     http.StatusTooManyRequests,
+			expectedResponse: `{"error":"Too many requests. Please try again later."}`,
+			expectedAborted:  true,
+		},
+		{
+			name: "GetCurrentRateLimit error - logs and falls through",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(-1, assert.AnError)
+				// currRate == -1, so rate limit check is skipped; Increase is still called
+				repoMock.On("IncreaseRateLimit", ctx, testKey, IPRateLimitInterval).
+					Return(nil)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+		{
+			name: "IncreaseRateLimit error - logs and proceeds",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(5, nil)
+				repoMock.On("IncreaseRateLimit", ctx, testKey, IPRateLimitInterval).
+					Return(assert.AnError)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(rec)
+
+			tc.setupRequest(ctx)
+			repoMock := tc.setupMockRepo(ctx)
+
+			rateLimitMiddleware := NewRateLimit(repoMock)
+			rateLimitMiddleware.RateLimit(RateLimitIPKey)(ctx)
+
+			assert.Equal(t, tc.expectedCode, rec.Code)
+			assert.Equal(t, tc.expectedResponse, strings.TrimSpace(rec.Body.String()))
+			assert.Equal(t, tc.expectedAborted, ctx.IsAborted())
+		})
+	}
+}
+
+func TestRateLimit_RateLimit_byUserID(t *testing.T) {
+	t.Parallel()
+
+	testKey := fmt.Sprintf(RateLimitKeyFormat, userID)
+
+	testCases := []struct {
+		name             string
+		setupRequest     func(ctx *gin.Context)
+		setupMockRepo    func(ctx context.Context) *mockRateLimit.Repository
+		expectedCode     int
+		expectedResponse string
+		expectedAborted  bool
+	}{
+		{
+			name: "first request - counter not exists (return 0)",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", mock.Anything, testKey).
+					Return(0, nil)
+				repoMock.On("IncreaseRateLimit", mock.Anything, testKey, UserIDRateLimitInterval).
+					Return(nil)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+		{
+			name: "under the limit - counter below max",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(UserIDRateLimitMaxCount-1, nil)
+				repoMock.On("IncreaseRateLimit", ctx, testKey, UserIDRateLimitInterval).
+					Return(nil)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+		{
+			name: "rate limit exceeded - counter at max",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(UserIDRateLimitMaxCount, nil)
+				// IncreaseRateLimit must NOT be called when rate limit is exceeded
+				return repoMock
+			},
+			expectedCode:     http.StatusTooManyRequests,
+			expectedResponse: `{"error":"Too many requests. Please try again later."}`,
+			expectedAborted:  true,
+		},
+		{
+			name: "GetCurrentRateLimit error - logs and falls through",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(-1, assert.AnError)
+				// currRate == -1, so rate limit check is skipped; Increase is still called
+				repoMock.On("IncreaseRateLimit", ctx, testKey, UserIDRateLimitInterval).
+					Return(nil)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+		{
+			name: "IncreaseRateLimit error - logs and proceeds",
+			setupRequest: func(ctx *gin.Context) {
+				ctx.Request = httptest.NewRequest(http.MethodGet, "/api/resource", nil)
+			},
+			setupMockRepo: func(ctx context.Context) *mockRateLimit.Repository {
+				repoMock := mockRateLimit.NewRepository(t)
+				repoMock.On("GetCurrentRateLimit", ctx, testKey).
+					Return(5, nil)
+				repoMock.On("IncreaseRateLimit", ctx, testKey, UserIDRateLimitInterval).
+					Return(assert.AnError)
+				return repoMock
+			},
+			expectedCode:     http.StatusOK,
+			expectedResponse: ``,
+			expectedAborted:  false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(rec)
+
+			// The middleware expects the user ID to be set in the context by a previous authentication middleware.
+			ctx.Set("claims", jwtClaims)
+
+			tc.setupRequest(ctx)
+			repoMock := tc.setupMockRepo(ctx)
+
+			rateLimitMiddleware := NewRateLimit(repoMock)
+			rateLimitMiddleware.RateLimit(RateLimitUserIDKey)(ctx)
+
+			assert.Equal(t, tc.expectedCode, rec.Code)
+			assert.Equal(t, tc.expectedResponse, strings.TrimSpace(rec.Body.String()))
+			assert.Equal(t, tc.expectedAborted, ctx.IsAborted())
+		})
+	}
+}
