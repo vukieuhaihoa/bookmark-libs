@@ -43,6 +43,10 @@ General-purpose utilities:
 - `CodeGenerator` — cryptographically secure random alphanumeric codes
 - JWT claims extraction from a Gin context (extracts user ID from `sub` claim)
 
+### `pkg/csv`
+CSV parsing utilities for multipart file uploads.
+- `ParseFromMultipartFile` — decodes a multipart uploaded CSV file into a target struct slice using struct field tags
+
 ### `pkg/validators`
 Custom `go-playground/validator` rules:
 - `PasswordStrength` — requires at least one uppercase, lowercase, digit, and special character (`@#$%!^&*()_+`)
@@ -59,7 +63,7 @@ Redis-backed rate limit repository:
 
 ## Requirements
 
-- Go 1.22+
+- Go 1.25+
 - PostgreSQL
 - Redis
 
@@ -123,3 +127,4 @@ make clean
 | `golang.org/x/crypto` | bcrypt |
 | `stretchr/testify` | Test assertions |
 | `alicebob/miniredis/v2` | In-memory Redis for tests |
+| `gocarina/gocsv` | CSV encoding/decoding |
