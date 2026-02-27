@@ -17,7 +17,10 @@ func createMultipartFileHeader(filename, content string) *multipart.FileHeader {
 	writer.Close()
 
 	reader := multipart.NewReader(body, writer.Boundary())
-	form, _ := reader.ReadForm(1 << 20)
+	form, err := reader.ReadForm(1 << 20)
+	if err != nil {
+		return nil
+	}
 	return form.File["file"][0]
 }
 
@@ -32,7 +35,6 @@ func TestParseFromMultipartFile(t *testing.T) {
 	testCases := []struct {
 		name string
 
-		filePath   string
 		csvContent string
 
 		expectedData  []row

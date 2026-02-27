@@ -41,6 +41,18 @@ func TestSplitIntoBatches(t *testing.T) {
 			batchSize: 1,
 			expected:  [][]int{{1}, {2}, {3}},
 		},
+		{
+			name:      "batch size of zero",
+			input:     []int{1, 2, 3},
+			batchSize: 0,
+			expected:  [][]int{},
+		},
+		{
+			name:      "batch size of negative number",
+			input:     []int{1, 2, 3},
+			batchSize: -1,
+			expected:  [][]int{},
+		},
 	}
 
 	for _, tc := range testCases {
