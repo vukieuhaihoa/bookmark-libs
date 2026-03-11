@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/newrelic/go-agent/v3/newrelic"
 	"github.com/rs/zerolog/log"
 	"github.com/vukieuhaihoa/bookmark-libs/pkg/utils"
 	"github.com/vukieuhaihoa/bookmark-libs/ratelimit"
@@ -96,6 +97,12 @@ func (r *rateLimit) RateLimit(key string) gin.HandlerFunc {
 		}
 
 		if currRate != -1 && currRate >= maxCount {
+			nrTx := newrelic.FromContext(c)
+			nrTx.Application().RecordCustomEvent("RateLimitExceeded", map[string]interface{}{
+				"client": c.ClientIP(),
+				"path":   c.FullPath(),
+			})
+
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many requests. Please try again later."})
 			c.Abort()
 			return
