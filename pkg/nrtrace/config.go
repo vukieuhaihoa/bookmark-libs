@@ -5,7 +5,7 @@ import "github.com/kelseyhightower/envconfig"
 // config defines the configuration structure for the New Relic client.
 type config struct {
 	AppName           string `envconfig:"NR_APP_NAME" default:"bookmark_service"`
-	LicenseKey        string `envconfig:"NR_LICENSE_KEY" default:"7340bb244cf71dbe075fd444cb3f29c7FFFFNRAL"`
+	LicenseKey        string `envconfig:"NR_LICENSE_KEY" default:""`
 	LogForwardEnabled bool   `envconfig:"NR_LOG_FORWARD_ENABLED" default:"true"`
 }
 
