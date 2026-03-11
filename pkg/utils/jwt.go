@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/newrelic/go-agent/v3/newrelic"
 )
 
 var (
@@ -24,6 +25,11 @@ func GetJWTClaimsFromRequest(ctx *gin.Context) (jwt.MapClaims, error) {
 	return claims, nil
 }
 
+var PrivateKeyCompromisedError = newrelic.Error{
+	Message: "JWT is invalid format - Private key might be compromised",
+	Class:   "JWTError",
+}
+
 // GetUserIDFromJWTClaims retrieves the user ID from JWT claims in the Gin context.
 // It looks for the "sub" claim which is expected to contain the user ID.
 func GetUserIDFromJWTClaims(ctx *gin.Context) (string, error) {
@@ -34,6 +40,7 @@ func GetUserIDFromJWTClaims(ctx *gin.Context) (string, error) {
 
 	userID, ok := claims["sub"].(string)
 	if !ok || userID == "" {
+		newrelic.FromContext(ctx).NoticeError(PrivateKeyCompromisedError)
 		return "", ErrEmptyID
 	}
 
